@@ -1,5 +1,5 @@
 (() => {
-	const APPS_SCRIPT_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbzX6M5CfWHB6Ez27hFzTHC-xzsTbU-g7DPcsZjhiBkVS_tXpFACxn-XfGkUneIFx8R5lA/exec';
+	const APPS_SCRIPT_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbz7VFlAlKUdp7MLmoXpH54a_oaQ9dRqWJMURW_Fmviyrnp7Nwj7TDzoLMiehh47pYPmhQ/exec';
 	const DELETE_CITA_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbx0Yxqxhk-_15pSZAFTR_omHFzGWX4kjzikyi4QgOJNJnL8J2Dh8NFhZWlbM3uDwqAL/exec';
 
 	const state = {
@@ -121,6 +121,12 @@
 		openEditPersonalBtn: document.getElementById('openEditPersonalBtn'),
 		closePersonalModalBtn: document.getElementById('closePersonalModalBtn'),
 		cancelPersonalBtn: document.getElementById('cancelPersonalBtn'),
+
+		openManualCitaBtn: document.getElementById('openManualCitaBtn'),
+		manualCitaModal: document.getElementById('manualCitaModal'),
+		manualCitaForm: document.getElementById('manualCitaForm'),
+		closeManualCitaBtn: document.getElementById('closeManualCitaBtn'),
+		cancelManualCitaBtn: document.getElementById('cancelManualCitaBtn'),
 	};
 
 	document.addEventListener('DOMContentLoaded', init);
@@ -165,6 +171,10 @@
 		ui.closePersonalModalBtn.addEventListener('click', closePersonalModal);
 		ui.cancelPersonalBtn.addEventListener('click', closePersonalModal);
 		ui.personalForm.addEventListener('submit', handleSavePersonalInfo);
+		ui.openManualCitaBtn.addEventListener('click', openManualCitaModal);
+		ui.closeManualCitaBtn.addEventListener('click', closeManualCitaModal);
+		ui.cancelManualCitaBtn.addEventListener('click', closeManualCitaModal);
+		ui.manualCitaForm.addEventListener('submit', handleCreateManualCita);
 		window.addEventListener('resize', adjustWorkspacePanelsHeight);
 	}
 
@@ -990,6 +1000,73 @@
 		ui.personalModal.classList.add('hidden');
 	}
 
+	function openManualCitaModal() {
+		ui.manualCitaModal.classList.remove('hidden');
+	}
+
+	function closeManualCitaModal() {
+		ui.manualCitaModal.classList.add('hidden');
+	}
+
+	function handleCreateManualCita(e) {
+		e.preventDefault();
+		const payload = getFormData(ui.manualCitaForm);
+		const submitBtn = document.getElementById('saveManualCitaBtn');
+		setButtonLoading(submitBtn, true);
+
+		payload.DNI = payload.dni;
+		payload.modalidad = payload.modalidad || '';
+
+		runServer('createCita', payload)
+			.then((res) => {
+				const created = res?.cita;
+				if (created) {
+					state.citas = sortCitas([created, ...state.citas.filter((c) => c.id !== created.id)]);
+					state.selectedId = created.id;
+					applyFilters();
+					renderKpis(state.citas);
+					renderLeftPane();
+					renderDetail();
+				}
+
+				const shouldSend = payload.enviarCorreo === 'on';
+				if (shouldSend && payload.correo) {
+					const modalidadType = getModalidadType({ modalidad: payload.modalidad });
+					const meetLink = modalidadType === 'virtual'
+						? getMeetLinkByCita({ instituto: payload.instituto })
+						: '';
+					const reminderPayload = {
+						estudiante: payload.reservadoPor || '',
+						correo: payload.correo || '',
+						mensaje: payload.mensaje || '',
+						linkOpcional: payload.linkOpcional || '',
+						meet: meetLink || '',
+						fechaCita: formatDateDisplay(payload.fecha),
+						horaCita: formatTimeDisplay(payload.hora),
+						instituto: payload.instituto || '',
+						fechaEnvio: getNowPayloadTimestamp(),
+					};
+					return runServer('sendReminder', reminderPayload)
+						.then((result) => {
+							if (result?.channel === 'email-fallback') {
+								showToast('Reserva creada. Recordatorio enviado por correo (fallback)', 'info');
+								return;
+							}
+							showToast('Reserva creada y correo enviado', 'success');
+						});
+				}
+
+				showToast('Reserva creada correctamente', 'success');
+				return Promise.resolve();
+			})
+			.then(() => {
+				ui.manualCitaForm.reset();
+				closeManualCitaModal();
+			})
+			.catch((err) => showToast(err.message || 'No se pudo crear la reserva', 'error'))
+			.finally(() => setButtonLoading(submitBtn, false));
+	}
+
 	function adjustWorkspacePanelsHeight() {
 		if (!ui.workspacePanels) return;
 
@@ -1438,6 +1515,12 @@
 
 		if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
 			const d = new Date(`${raw}T00:00:00`);
+			return Number.isNaN(d.getTime()) ? null : d;
+		}
+
+		if (/^\d{2}\/\d{2}\/\d{4}$/.test(raw)) {
+			const [dd, mm, yyyy] = raw.split('/').map((part) => Number(part));
+			const d = new Date(yyyy, mm - 1, dd, 0, 0, 0, 0);
 			return Number.isNaN(d.getTime()) ? null : d;
 		}
 
